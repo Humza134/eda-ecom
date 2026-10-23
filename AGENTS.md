@@ -49,6 +49,7 @@
 
 - Never commit or log passwords, OTPs, JWTs, authorization headers, signing keys, database URLs,
   or other credentials. Return stable, sanitized errors without provider or database details.
+- Never copy secrets or private keys into Docker images.
 - Validate JWT signature, allow-listed RS256 algorithm, `kid`, expiration, issuer, audience, token
   type, and UUID subject. Accept refresh tokens only in the refresh flow.
 - Enforce resource ownership server-side; use `401` for invalid auth and `403` for insufficient access.
@@ -63,6 +64,7 @@
 
 ## Verification
 
+- Run only relevant tests; avoid unnecessary full-suite runs and repeated testing loops.
 - Run focused tests for the affected service. From `auth-user/`:
 
 ```powershell
