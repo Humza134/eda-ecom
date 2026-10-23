@@ -1,156 +1,80 @@
 # AGENTS.md
 
-## Scope and working rules
+## Project
 
-- These instructions apply repository-wide; a nearer `AGENTS.md` may add stricter rules.
-- Inspect affected code, settings, migrations, callers, and working-tree changes before editing.
-- Keep changes minimal, typed, async, and testable. Preserve API contracts unless a change is
-  explicitly authorized.
-- Do not add dependencies or abstractions without a concrete need. Update `pyproject.toml` and
-  `uv.lock` together when a dependency change is authorized.
-- Never modify an applied migration or run destructive database operations without explicit
-  approval. Never claim production readiness or an unrun check passed.
-- Report changed files, checks actually run, skipped checks, assumptions, and remaining risks.
+- This repository contains two FastAPI microservices: `auth-user/` and `todo/`.
+- Both target Python 3.13+ and use FastAPI, Pydantic v2, SQLModel, asyncpg,
+  PostgreSQL/Neon, Alembic, `uv`, and Docker Compose.
+- `auth-user` owns registration, login, refresh, email verification, RS256 signing, JWKS, and
+  Redis-backed authentication rate limiting.
+- `todo` owns user-scoped todo resources and validates access tokens issued by `auth-user`.
+- Kafka and additional commerce services are not implemented; do not describe them as available.
 
-## Repository reality
+## Repository boundaries
 
-- Current services are `auth-user/` and `todo/`; both target Python 3.13+, FastAPI, Pydantic v2,
-  SQLModel, asyncpg, PostgreSQL/NeonDB, Alembic, `uv`, and Docker Compose.
-- `auth-user` implements registration, login, refresh, email verification, RS256 signing, and a
-  JWKS endpoint. `todo` is an example resource service that validates auth-user JWTs.
-- `compose.yaml` defines separate app and one-shot Alembic migration containers. No local
-  PostgreSQL container exists; database URLs are supplied for external databases.
-- Kafka, Redis, product catalog, orders, inventory, payments, and notifications are planned only.
-  Do not describe them as implemented or add their infrastructure unless the task requests it.
+- Treat each service as independent, with its own dependencies, models, migrations, configuration,
+  and database connection.
+- Do not import ORM models, sessions, or service internals across service directories.
+- Pass cross-service data through APIs or, when explicitly introduced, versioned events.
+- Only `auth-user` may load private signing keys or issue tokens. Downstream services consume
+  public JWKS and a small typed identity such as a user UUID.
+- Redis only stores ephemeral authentication rate-limit counters; it is not a source of truth.
+- Use `compose.yaml` for topology and `auth-user/README.md` for rate-limit and verification settings.
 
-## Application architecture
+## Python and FastAPI conventions
 
-- Keep HTTP concerns in FastAPI route modules: request validation, dependency injection,
-  authorization, response models, status codes, and mapping domain exceptions to safe errors.
-- Put business rules and transaction boundaries in service modules. New service code must not
-  raise `HTTPException`; existing instances are debt, not a pattern to copy.
-- Use explicit Pydantic v2/SQLModel request and response schemas and `model_dump()` APIs. Do not
-  return database entities when that would expose internal or sensitive fields.
-- Inject sessions and authenticated identity with `Depends`. Downstream services receive a small,
-  typed user context/UUID, never an auth-service ORM object.
-- Await all database, HTTP, email, Kafka, Redis, and provider I/O. Move unavoidable blocking work
-  to `asyncio.to_thread` or use an async client. Keep complete type annotations and avoid `Any`.
-- Use absolute imports consistently within the current per-service execution layout. Do not import
-  ORM models, sessions, or internals across service directories.
+- Keep HTTP validation, dependencies, authorization, response schemas, and safe error mapping in routes.
+- Put business rules and transaction boundaries in service modules. New or refactored service
+  code should raise typed domain exceptions rather than `HTTPException`.
+- Use explicit Pydantic v2/SQLModel schemas and `model_dump()`; do not expose sensitive entities.
+- Inject `AsyncSession` and authenticated identity with `Depends`; request dependencies manage
+  lifetime, while services own commit and rollback decisions.
+- Await all I/O; move unavoidable blocking calls to `asyncio.to_thread`.
+- Keep complete type annotations and the services' existing absolute-import execution layout.
+- Preserve public API contracts unless the task explicitly authorizes a breaking change.
+- Update a service's `pyproject.toml` and `uv.lock` together when a dependency change is authorized.
 
-## Database and migrations
+## Data and events
 
-- Preserve the existing `AsyncEngine`, `async_sessionmaker`, `AsyncSession`, and async
-  `get_session` pattern. A service owns commits and rollbacks; request dependencies only manage
-  session lifetime and rollback on escape.
-- Each stateful service owns one database/schema. Never query, join, or share tables across
-  services. Cross-service data moves through APIs or, when implemented, versioned events.
-- Alembic owns schemas. Change SQLModel entities and add a reviewed migration together; never use
-  `SQLModel.metadata.create_all()` during application startup in deployed environments.
-- Review autogenerated migrations, upgrade and downgrade paths, constraints, null backfills, and
-  data-loss risk. Do not rewrite files already applied to any shared environment.
-- Obtain explicit user approval before any database-changing command, including Alembic upgrades
-  and Compose migration services. Treat migrations as manual operations, never routine automated
-  checks. Even read-only migration checks may connect to the configured database; first confirm
-  the target is an intended non-production environment and that no write can occur.
-- Neon/PostgreSQL production connections must verify TLS certificates and hostnames. The current
-  disabled certificate verification and SQL echo in both connection modules are known debt; do
-  not reproduce them. Avoid remote I/O while holding database locks.
-- Use timezone-aware UTC values. Use `Decimal` plus fixed-precision columns for money.
+- Each stateful service owns its database or schema. Never query, join, or share tables across
+  service boundaries.
+- Use the existing async engine, `async_sessionmaker`, `AsyncSession`, and async `get_session`
+  pattern.
+- Use timezone-aware UTC values and `Decimal` with fixed-precision columns for money.
+- Kafka is not configured. If event-driven integration is requested, use versioned Pydantic event
+  contracts, stable event IDs, and an atomic transactional outbox.
+- Consumers must be idempotent, deduplicate event IDs, and acknowledge only after database commit.
 
-## Authentication and API security
+## Security and migration safety
 
-- Only `auth-user` may read RSA private keys or sign tokens. Publish public keys through JWKS with
-  a stable `kid`; rotate keys with an overlap longer than the maximum token lifetime.
-- Validate JWT signature, an allow-listed algorithm (RS256), `kid`, `exp`, `nbf`, issuer,
-  audience, and `type="access"`; parse `sub` as UUID. Refresh tokens are accepted only by the
-  refresh flow. Use `401` for invalid credentials and `403` for insufficient permission.
-- Downstream services validate cached JWKS locally. In Compose, service-to-service URLs use
-  `http://auth-user:8000`, not `localhost` or `host.docker.internal`; make URL, issuer, audience,
-  and algorithms typed settings overridable in tests.
-- Scope resource reads and writes to the authenticated user and enforce role/ownership checks
-  server-side. Validate all boundaries and calculate authoritative values server-side.
-- Never log passwords, verification codes, JWTs, authorization headers, keys, database URLs, or
-  credentials. Return stable, sanitized API errors; never expose raw database/provider errors.
-- Keep secrets out of source, images, and output. The checked-out `.env`, PEM keys, key/token
-  prints, permissive JWT validation, and verbose exception responses are known security debt, not
-  canonical examples. Rotate any exposed credentials when remediation is authorized.
+- Never commit or log passwords, OTPs, JWTs, authorization headers, signing keys, database URLs,
+  or other credentials. Return stable, sanitized errors without provider or database details.
+- Validate JWT signature, allow-listed RS256 algorithm, `kid`, expiration, issuer, audience, token
+  type, and UUID subject. Accept refresh tokens only in the refresh flow.
+- Enforce resource ownership server-side; use `401` for invalid auth and `403` for insufficient access.
+- Production PostgreSQL connections must verify TLS certificates and hostnames.
+- Alembic owns schemas. Change SQLModel entities and add a reviewed migration together; do not add
+  startup-time schema creation.
+- Never edit an applied migration. Review upgrade and downgrade behavior, constraints, backfills,
+  and data-loss risk.
+- Obtain explicit approval before any database-changing command, including Alembic upgrades and
+  Compose migration services. Before a read-only migration check, confirm the configured target is
+  an intended non-production database and that the command cannot write.
 
-## Docker and configuration
+## Verification
 
-- Preserve the multi-stage images, locked `uv sync --frozen`, and non-root runtime user. Keep build
-  contexts narrow, pin tool/image versions deliberately, and exclude `.env`, keys, caches, and
-  virtual environments from build contexts.
-- Supply configuration through environment variables or an approved secret store. Maintain safe
-  examples with placeholders; never bake or commit live secrets.
-- Use Compose service DNS and container ports for internal traffic. Expose only required host
-  ports and keep development-only services off production networks.
-- Keep migration containers one-shot and require successful migration completion before app
-  startup. Never run `docker compose down -v` without explicit authorization to delete data.
-
-## Planned event-driven architecture
-
-- Kafka is not installed or configured. When explicitly introduced, use topics named
-  `ecommerce.<entity>.<action>.v<version>`, key purchase-flow records by `order_id`, and define
-  topic names and Pydantic event contracts once per service.
-- Every event carries UUID `event_id`/`correlation_id`, exact `event_type`, UTC timestamp,
-  producer, and validated data. Represent money as a decimal string plus ISO currency. Breaking
-  changes require a new topic version and contract tests.
-- Persist domain state and an outbox record atomically. Publish asynchronously with acknowledged,
-  idempotent production; never publish as a substitute for the database transaction.
-- Consumers use stable service consumer groups, disable auto-commit, deduplicate `event_id` with
-  a unique database constraint, and commit offsets only after database commit. Handlers and
-  retried commands must be idempotent.
-- Bound retries with backoff. Send permanent failures to a versioned DLQ and commit the source
-  offset only after the DLQ write succeeds. Track consumer tasks and shut them down gracefully.
-- Redis is optional, not a default dependency or source of truth. Add it only for a measured need
-  such as bounded caching, rate limiting, or ephemeral coordination, with TTLs, failure behavior,
-  invalidation, ownership, and tests documented first. Do not use it to replace durable outbox or
-  idempotency records.
-
-## Verification and commands
-
-- Run only focused checks relevant to the change; avoid repetitive full-suite loops. Tests should
-  cover authentication claims and failures, authorization/ownership, commit and rollback paths,
-  and migration upgrades. Future event work must also test replay, deduplication, partial failure,
-  retry exhaustion, offset timing, and DLQ behavior.
-- Repository-backed non-database command, run from `auth-user/` or `todo/` as applicable:
+- Run focused tests for the affected service. From `auth-user/`:
 
 ```powershell
-uv sync --frozen
+uv run python -m unittest discover -s tests -v
 ```
 
-- Read-only migration check: run from the relevant service only after confirming its configured
-  database is the intended non-production target and the command cannot cause writes:
+- From `todo/`:
 
 ```powershell
-uv run alembic check
+uv run python -m unittest discover -s tests -v
 ```
 
-- Manual, approval-required database-changing operations; never run these as routine checks:
-
-```powershell
-uv run alembic upgrade head
-docker compose run --rm auth-migrate alembic upgrade head
-docker compose run --rm todo-migrate alembic upgrade head
-```
-
-- The root Compose configuration can be validated without starting services or migrations:
-
-```powershell
-docker compose config --quiet
-```
-
-- Pytest, Ruff, type-checking tools, and their configuration are not currently declared, and no
-  test suite exists. Do not install tools or invent commands. Once they are installed, configured,
-  and verified in this repository, update this file with the exact repository-specific commands.
-
-## Canonical references
-
-- Reference `auth-user/Dockerfile` and `todo/Dockerfile` only for their verified multi-stage build,
-  locked dependency installation, and non-root runtime patterns. They are not complete
-  production-ready examples: the current build contexts can include private-key material.
-- `compose.yaml`: separate one-shot migration services and migration-gated application startup.
-
-Do not treat current authentication, JWT logging/validation, database TLS, error mapping, or
-startup schema helpers as canonical; follow the requirements above when those areas are changed.
+- Test changed auth claims, ownership, transaction outcomes, and security-sensitive failure paths.
+- No Ruff, Pytest, or static type-check command is configured; do not invent or claim those checks.
+- Report only checks actually run and call out skipped checks or remaining risks.
