@@ -1,0 +1,36 @@
+# Ignore local virtual environment
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables / config that shouldn’t go into image
+.env
+.env.*
+
+# Runtime secrets and cryptographic private-key material
+keys/
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/id_rsa*
+
+# Git and VCS
+.git/
+.gitignore
+
+# Dockerfiles and build artifacts you don’t want
+.dockerignore
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Possibly IDE files
+.vscode/
+.idea/

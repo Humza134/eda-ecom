@@ -1,0 +1,17 @@
+[project]
+name = "todo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.17.1",
+    "asyncpg>=0.30.0",
+    "fastapi[standard]>=0.120.0",
+    "psycopg2>=2.9.11",
+    "pydantic>=2.12.3",
+    "pydantic-settings>=2.11.0",
+    "pyjwt[crypto]>=2.10.1",
+    "sqlmodel>=0.0.27",
+    "uvicorn>=0.38.0",
+]

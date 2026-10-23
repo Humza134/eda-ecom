@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+.env.*
+!.env.example
+keys/
+
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*

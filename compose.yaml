@@ -1,0 +1,149 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7.4.11-alpine3.21
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /data
+    networks:
+      - auth-cache
+
+  auth-migrate:
+    build:
+      context: ./auth-user
+      dockerfile: Dockerfile
+    image: auth-user-migrate:v0.0.1
+    command: alembic upgrade head
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${AUTH_DATABASE_URL}
+      RATE_LIMIT_KEY_SECRET: ${RATE_LIMIT_KEY_SECRET:?RATE_LIMIT_KEY_SECRET must be at least 32 characters}
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:?OTP_HMAC_SECRET must be at least 32 characters}
+    restart: "no"
+
+  auth-user:
+    build:
+      context: ./auth-user
+      dockerfile: Dockerfile
+    image: auth-user:v0.0.1
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${AUTH_DATABASE_URL}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
+      PRIVATE_KEY_PATH: /run/secrets/auth_private_key
+      PUBLIC_KEY_PATH: /run/secrets/auth_public_key
+      ALGORITHM: ${ALGORITHM}
+      JWT_KEY_ID: ${JWT_KEY_ID}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_ACCESS_AUDIENCE: ${JWT_ACCESS_AUDIENCE}
+      JWT_REFRESH_AUDIENCE: ${JWT_REFRESH_AUDIENCE}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASS: ${EMAIL_PASS}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      RATE_LIMIT_KEY_SECRET: ${RATE_LIMIT_KEY_SECRET:?RATE_LIMIT_KEY_SECRET must be at least 32 characters}
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:?OTP_HMAC_SECRET must be at least 32 characters}
+      OTP_EXPIRY_SECONDS: ${OTP_EXPIRY_SECONDS:-600}
+      OTP_MAX_ATTEMPTS: ${OTP_MAX_ATTEMPTS:-5}
+      REDIS_URL: ${AUTH_REDIS_URL:-redis://redis:6379/0}
+      REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
+      REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
+      REDIS_RATE_LIMIT_KEY_PREFIX: ${REDIS_RATE_LIMIT_KEY_PREFIX:-auth-rate-limit}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      LOGIN_ACCOUNT_RATE_LIMIT: ${LOGIN_ACCOUNT_RATE_LIMIT:-5}
+      LOGIN_CLIENT_RATE_LIMIT: ${LOGIN_CLIENT_RATE_LIMIT:-20}
+      SIGNUP_RATE_LIMIT_WINDOW_SECONDS: ${SIGNUP_RATE_LIMIT_WINDOW_SECONDS:-3600}
+      SIGNUP_ACCOUNT_RATE_LIMIT: ${SIGNUP_ACCOUNT_RATE_LIMIT:-3}
+      SIGNUP_CLIENT_RATE_LIMIT: ${SIGNUP_CLIENT_RATE_LIMIT:-10}
+      VERIFY_EMAIL_RATE_LIMIT_WINDOW_SECONDS: ${VERIFY_EMAIL_RATE_LIMIT_WINDOW_SECONDS:-900}
+      VERIFY_EMAIL_ACCOUNT_RATE_LIMIT: ${VERIFY_EMAIL_ACCOUNT_RATE_LIMIT:-5}
+      VERIFY_EMAIL_CLIENT_RATE_LIMIT: ${VERIFY_EMAIL_CLIENT_RATE_LIMIT:-30}
+      RESEND_OTP_COOLDOWN_SECONDS: ${RESEND_OTP_COOLDOWN_SECONDS:-60}
+      RESEND_OTP_ACCOUNT_RATE_LIMIT: ${RESEND_OTP_ACCOUNT_RATE_LIMIT:-1}
+      RESEND_OTP_CLIENT_RATE_LIMIT: ${RESEND_OTP_CLIENT_RATE_LIMIT:-10}
+      REFRESH_RATE_LIMIT_WINDOW_SECONDS: ${REFRESH_RATE_LIMIT_WINDOW_SECONDS:-60}
+      REFRESH_TOKEN_RATE_LIMIT: ${REFRESH_TOKEN_RATE_LIMIT:-30}
+      REFRESH_CLIENT_RATE_LIMIT: ${REFRESH_CLIENT_RATE_LIMIT:-120}
+    secrets:
+      - source: auth_private_key
+        target: auth_private_key
+        mode: 0444
+      - source: auth_public_key
+        target: auth_public_key
+        mode: 0444
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - auth-cache
+
+  todo-migrate:
+    build:
+      context: ./todo
+      dockerfile: Dockerfile
+    image: todo-app-migrate:v0.0.1
+    command: alembic upgrade head
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${TODO_DATABASE_URL}
+    restart: "no"
+
+  todo-app:
+    build:
+      context: ./todo
+      dockerfile: Dockerfile
+    image: todo-app:v0.0.2
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${TODO_DATABASE_URL}
+      JWKS_URL: http://auth-user:8000/.well-known/jwks.json
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_ACCESS_AUDIENCE}
+      ALGORITHM: ${ALGORITHM}
+    depends_on:
+      todo-migrate:
+        condition: service_completed_successfully
+      auth-user:
+        condition: service_started
+
+secrets:
+  auth_private_key:
+    file: ${AUTH_PRIVATE_KEY_FILE:?AUTH_PRIVATE_KEY_FILE must point to the active private key}
+  auth_public_key:
+    file: ${AUTH_PUBLIC_KEY_FILE:?AUTH_PUBLIC_KEY_FILE must point to the active public key}
+
+networks:
+  auth-cache:
+    internal: true
